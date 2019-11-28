@@ -1,0 +1,33 @@
+#!/bin/bash
+
+domain=${1:-}
+email=${2:-admin@${domain}}
+
+myname=${0##*/}
+mydir=$(dirname "$(readlink -f "$0")")
+
+if [[ -z "$domain" || "${domain:0:1}" == '-' ]]; then
+	exec >&2
+	echo "Usage: $myname DOMAIN [EMAIL]"
+	exit 1
+fi
+
+certopts=(
+#	run --installer apache
+	certonly
+	--manual
+	--rsa-key-size 4096
+	--non-interactive
+	--agree-tos
+	--email "$email"
+#	--csr "$domain".csr
+	--manual-public-ip-logging-ok
+	--manual-auth-hook    "$mydir"/certbot-dns-godaddy-auth
+	--manual-cleanup-hook "$mydir"/certbot-dns-godaddy-cleanup
+	--preferred-challenges dns
+#	--staging
+#	--force-renew
+)
+
+
+sudo certbot "${certopts[@]}" -d "${domain},*.${domain}"
