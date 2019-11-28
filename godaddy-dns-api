@@ -1,0 +1,346 @@
+#!/bin/bash -ue
+#
+# godaddy-dns-api - API for managing GoDaddy DNS
+#
+#    Copyright (C) 2019 Rodrigo Silva (MestreLion) <linux@rodrigosilva.com>
+#
+#    This program is free software: you can redistribute it and/or modify
+#    it under the terms of the GNU General Public License as published by
+#    the Free Software Foundation, either version 3 of the License, or
+#    (at your option) any later version.
+#
+#    This program is distributed in the hope that it will be useful,
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#    GNU General Public License for more details.
+#
+#    You should have received a copy of the GNU General Public License
+#    along with this program. See <http://www.gnu.org/licenses/gpl.html>
+#
+# References:
+# https://developer.godaddy.com/doc/endpoint/domains
+# https://medium.com/@acidumirae/wildcard-letsencrypt-certificate-and-godaddy-acme-challenge-record-3ec74be6bd62
+# http://pbxhacks.com/automating-lets-encrypt-ssl-certs-via-godaddy-dns-challenge/
+
+# Suggested crontab usage for dyndns:
+# @hourly $HOME/path/to/godaddy-dyndns
+
+# Logsize for dyndns @hourly after 1 year, not considering both ipv6 and ipv4:
+# 878KiB, worst case scenario: full 40-digit IPv6 changing every hour, 105B per entry
+# 355KiB, best  case scenario: full 16-digit IPv4 that never changes,   42B per entry
+
+
+# Default values ---------------------------------------------------------------
+
+# Internal
+myname=${0##*/}
+mydir=$(dirname "$(readlink -f "$0")")
+config=${XDG_CONFIG_HOME:-$HOME/.config}/godaddy-dns-api.conf
+logfile=${XDG_CACHE_HOME:-$HOME/.cache}/godaddy-dns-api.log
+cmd=api
+cmdset=0
+verbose=0
+
+# Common
+GDAPI_HOST='https://api.godaddy.com'  # OTE (Test): 'https://api.ote-godaddy.com'
+GDAPI_ROOT_DOMAIN=
+GDAPI_KEY=
+GDAPI_SECRET=
+GDAPI_TTL=600
+
+# ACME / Certbot
+acme_path_suffix=records/TXT/_acme-challenge
+GDAPI_ACME_WAIT=30
+
+# DynDNS
+GDAPI_DYNDNS_SUBDOMAIN=@
+GDAPI_DYNDNS_IP_TYPE=both
+GDAPI_DYNDNS_IPV4_PROVIDER='https://api.ipify.org'
+GDAPI_DYNDNS_IPV6_PROVIDER=
+
+
+# Main API functions -----------------------------------------------------------
+
+usage() {
+	if [[ "${1:-}" ]] ; then exec >&2; fi
+	cat <<-USAGE
+	Usage:
+	  godaddy-dns-api [COMMAND]     [general options] [command options]
+	  certbot-dns-godaddy-auth      [general options] [auth    options]
+	  certbot-dns-godaddy-cleanup   [general options] [cleanup options]
+	  godaddy-dyndns                [general options] [dyndns  options]
+	  godaddy-dns-api [api]         [general options] [ENDPOINT] [VERB] [JSONDATA]
+	USAGE
+	if [[ "${1:-}" ]] ; then
+		cat <<- USAGE
+		Try '$myname --help' for more information.
+		USAGE
+		exit 1
+	fi
+	cat <<-USAGE
+
+	API for GoDaddy DNS.
+
+	COMMAND - The operation mode. Possible values:
+	- certbot-auth   : Usage as certbot's --manual-auth-hook script
+	- certbot-cleanup: Usage as certbot's --manual-cleanup-hook script
+	- dyndns         : Update a DNS A/AAAA record with current (external) IP
+	- api            : Call an arbitrary API method. This is the default.
+
+	General Options:
+	-h|--help     - show this page.
+
+	-v|--verbose
+	   print more details about what is being done. It will also enable debug
+	   messages to <stderr> on all API calls, which might confuse certbot.
+
+	-c|--config FILE
+	   Use a different config file. If FILE does not exit it will be created,
+	   with mode 0600. Any required parent directories will also be created,
+	   with mode 0700. [Default: $config]
+
+	Copyright (C) 2019 Rodrigo Silva (MestreLion) <linux@rodrigosilva.com>
+	License: GPLv3 or later. See <http://www.gnu.org/licenses/gpl.html>
+	USAGE
+	exit 0
+}
+
+create_config() {
+	mkdir --parents --mode=0700 -- "$(dirname "$1")"
+	cat > "$1" <<-EOF
+		# Godaddy DNS API configuration file.
+		# https://github.com/MestreLion/godaddy-dns-api
+		#
+		# Some values may be overwritten by environment variables or
+		# command-line arguments.
+		#
+		# This file will be sourced by bash, keep a valid syntax!
+
+		# GoDaddy API account credentials.
+		# https://developer.godaddy.com/keys
+		GDAPI_KEY=
+		GDAPI_SECRET=
+
+		# Account root domain. Do not include any subdomains or wildcards.
+		GDAPI_ROOT_DOMAIN=
+
+		# Setup Dynamic DNS for 'ipv6', 'ipv4' or 'both' (default)
+		GDAPI_DYNDNS_IP_TYPE=$GDAPI_DYNDNS_IP_TYPE
+
+		# Sources for obtaining external IPv4 and global IPv6/128.
+		# Fill in with the address of a web service that replies the IP
+		# as text, such as the example below, and it will be "curl-ed"
+		# to obtain the IP. Some services are:
+		# https://ipv6.wtfismyip.com/text  https://ipv4.wtfismyip.com/text
+		# https://ip6.seeip.org            https://ip4.seeip.org'
+		# https://api6.ipify.org           https://api.ipify.org
+		# https://ipv6.icanhazip.com       https://ipv4.icanhazip.com
+		# Leave commented or blank for the internal provider: It uses the
+		# 'ip' local  command for IPv6 and https://api.ipify.org for IPv4.
+		#GDAPI_DYNDNS_IPV4_PROVIDER='$GDAPI_DYNDNS_IPV4_PROVIDER'
+		#GDAPI_DYNDNS_IPV6_PROVIDER='$GDAPI_DYNDNS_IPV6_PROVIDER
+
+		# GoDaddy API host, by default Production host $GDAPI_HOST
+		# Uncomment to use the Test environment (OTE) or an alternate host.
+		#GDAPI_HOST=https://api.ote-godaddy.com
+
+		# Time-To-Live, in seconds, for any DNS entries created or modified.
+		# GoDaddy's default is 3600 (1 hour), and minimum is 600 (5 minutes).
+		#GDAPI_TTL=600
+
+		# Subdomain for Dynamic DNS. Default is '@', meaning the root domain.
+		# Uncomment and change to setup at a subdomain instead. Use just a
+		# single word, do not include the root domain.
+		#GDAPI_DYNDNS_SUBDOMAIN=$GDAPI_DYNDNS_SUBDOMAIN
+
+		# Wait time, in seconds, for DNS propagation after acme/certbot
+		# authentication and cleanup. Uncomment to change the default.
+		#GDAPI_ACME_WAIT=$GDAPI_ACME_WAIT
+	EOF
+	chmod 0600 -- "$1"
+}
+
+api() {
+	local path=${1:-}
+	local verb=${2:-GET}
+	local data=${3:-}
+	local endpoint=$GDAPI_HOST/v1/domains/$path
+	local opts=(
+		--silent
+		-H "Authorization: sso-key $GDAPI_KEY:$GDAPI_SECRET"
+		-H "Accept: application/json"
+		-H "Content-Type: application/json"
+	)
+	debug "$verb" "$endpoint" "$data"
+	if [[ "${verb^^}" != "GET" ]]; then opts+=(-X "${verb^^}"); fi
+	if [[ "$data" ]];              then opts+=(-d "$data"); fi
+	curl "${opts[@]}" -- "$endpoint"
+}
+
+dyndns() {
+	dyndns_ip 4 "$GDAPI_DYNDNS_IPV4_PROVIDER" 'IPv4 external'    A
+	dyndns_ip 6 "$GDAPI_DYNDNS_IPV6_PROVIDER" 'IPv6 /128 global' AAAA
+}
+
+dyndns_ip() {
+	local ipv=$1
+	local provider=$2
+	local desc=$3
+	local rectype=$4
+	if [[ " ipv$ipv both " =~ " ${GDAPI_DYNDNS_IP_TYPE,,} " ]]; then
+		ip=$(if [[ "$provider" ]]; then curl -s$ipv -- "$provider"; else IPv$ipv; fi)
+		if [[ -z "$ip" ]]; then fatal "Could not determine $desc address"; fi
+		dyndns_api "$rectype" "$ip"
+	fi
+}
+
+dyndns_api() {
+	local type=$1
+	local value=$2
+	local ttl=${GDAPI_TTL:+",\"ttl\":${GDAPI_TTL}"}
+	local data="[{\"data\":\"${value}\"${ttl}}]"
+	local path=$GDAPI_ROOT_DOMAIN/records/$type/$GDAPI_DYNDNS_SUBDOMAIN
+	local curval=$(api "$path" | get_data_value)
+	if [[ "$curval" == "$value" ]]; then log "$value"; return; fi
+	api "$path" put "$data"
+	log "${value:--}\t${curval:--}"
+}
+
+certbot() {
+	integer "$GDAPI_ACME_WAIT" GDAPI_ACME_WAIT
+	require "${CERTBOT_DOMAIN:-}" CERTBOT_DOMAIN
+	if [[ $cmd == auth ]]; then require "${CERTBOT_VALIDATION:-}" CERTBOT_VALIDATION; fi
+	# FIXME: CERTBOT_DOMAIN here possibly has to be GDAPI_ROOT_DOMAIN instead
+	certbot_$cmd "$CERTBOT_DOMAIN"/"$acme_path_suffix" "${CERTBOT_VALIDATION:-}"
+	sleep $GDAPI_ACME_WAIT
+}
+
+certbot_auth() {
+	local path=$1
+	local validation=${2//\"/\\\"}  #"}  # Sanitize input and keep bad parsers happy
+	# Add new validation record along with currently existing records
+	# Needed when validating both root domain and wildcard, as certbot expects
+	# both validation values to simultaneously exist under the same name and type
+	local data=$({
+		# Build records with data and optionally TTL
+		# Name and type are not needed as they're already in path
+		local sep value recs ttl=${GDAPI_TTL:+",\"ttl\":${GDAPI_TTL}"}
+		while IFS= read -r value; do
+			if [[ -z "$value" ]]; then continue; fi
+			recs+="${sep:-}{\"data\":\"${value}\"${ttl}}"
+			sep=','
+		done
+		echo "[${recs}]"
+	} < <(
+		# Extract data value from current records, if any, one per line
+		api "$path" | get_data_value
+		# Add validation
+		echo "$validation"
+	))
+	api "$path" put "$data"
+}
+
+certbot_cleanup() {
+	# GoDaddy API can not delete a record, just replace it with another one.
+	# So we just replace it with an empty data record.
+	local path=$1
+	api "$path" put '[{"data":""}]'
+}
+
+
+# API helper functions ---------------------------------------------------------
+
+fatal()   { echo "$@" >&2; exit 1; }
+message() { if ((verbose)); then echo "$@"; fi; }
+log()     { echo -e "$(date --rfc-3339=seconds)\t$@" >> "$logfile"; }
+
+debug() {
+	local verb=${1:-GET}
+	local endpoint=${2:-}
+	local data=${3:-}
+	local msg=("${verb^^}" "$endpoint")
+	if [[ "$data" ]]; then msg+=("'${data}'"); fi
+	message "${msg[@]}" >&2
+}
+
+get_data_value() { awk 'BEGIN{RS="[^\\\\]\"data\":\""; FS="\""} NR>1{print $1}'; }
+
+IPv6() { ip -o -6 addr | awk -F'/| +' '$5 == 128 && $7 == "global" {print $4; exit}'; }
+IPv4() { curl -s -- 'https://api.ipify.org'; }
+
+
+# Input handling helper functions ----------------------------------------------
+
+argerr()  { printf "%s: %s\n" "$myname" "${1:-error}" >&2 ; usage 1; }
+invalid() { argerr "invalid option${2:+ for $2}${1:+: $1}"; }
+require() { [[ "$1" ]] || argerr "${2:-missing value}${3:+ in $3} is required"; }
+integer() { require "$1" "${2:-NUM}" "${3-}"; [[ "$1" != *[!0-9]* ]] ||
+            argerr "'$1'${2:+ in $2} is not an integer."; }
+
+# Handle COMMAND setting, preventing it to be set more than once, either by
+# duplicated COMMAND argument or specialized $0 with COMMAND argument, such as
+# `certbot-dns-godaddy-auth dyndns ...`
+set_cmd() {
+	if ((cmdset)); then
+		argerr "duplicated COMMAND argument, already set as '$cmd': $1"
+	fi
+	cmd=${1,,}
+	cmdset=1
+}
+
+
+# Input handling and validations -----------------------------------------------
+
+# Pre-set cmd based on executable filename
+case "$myname" in
+	certbot-dns-godaddy-auth)    set_cmd auth;;
+	certbot-dns-godaddy-cleanup) set_cmd cleanup;;
+	godaddy-dyndns)              set_cmd dyndns;;
+esac
+
+# Pre-parse --help
+for arg in "$@"; do [[ "$arg" == "-h" || "$arg" == "--help" ]] && usage; done
+
+# Parse command-line options that cannot override config file settings
+apiopts=()
+while (($#)); do
+	case "$1" in
+	-v|--verbose   ) verbose=1;;
+	certbot-auth   ) set_cmd auth;;
+	certbot-cleanup) set_cmd cleanup;;
+	dyndns         ) set_cmd dyndns;;
+	api            ) set_cmd api;;
+	--config=*     )        config="${1#*=}";;
+	-c|--config    ) shift; config="${1:-}";;
+	--) shift; break;;
+	esac
+	shift
+done
+
+cmd=${cmd:-$default_cmd}
+[[    "$config" ]] || missing --config FILE
+[[ -f "$config" ]] || create_config "$config"
+
+source "$config"
+
+require "$GDAPI_ROOT_DOMAIN" GDAPI_ROOT_DOMAIN
+require "$GDAPI_HOST"        GDAPI_HOST
+require "$GDAPI_KEY"         GDAPI_KEY
+require "$GDAPI_SECRET"      GDAPI_SECRET
+integer "$GDAPI_TTL"         GDAPI_TTL
+
+
+# Command selection and invocation ---------------------------------------------
+
+if [[ "$cmd" == "api" ]]; then
+	(( $# > 3 )) && invalid "$4"
+	api "${1:-}" "${2:-GET}" "${3:-}"
+	exit
+fi
+
+(( $# )) && invalid "$1" "command '$cmd'"
+case "$cmd" in
+	auth|cleanup) certbot "$cmd";;
+	dyndns)       dyndns;;
+	*) invalid "$cmd" COMMAND;;
+esac
