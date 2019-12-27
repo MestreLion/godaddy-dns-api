@@ -174,7 +174,7 @@ api() {
 	debug "$verb" "$endpoint" "$data"
 	if [[ "${verb^^}" != "GET" ]]; then opts+=(-X "${verb^^}"); fi
 	if [[ "$data" ]];              then opts+=(-d "$data"); fi
-	curl "${opts[@]}" -- "$endpoint"
+	safecurl "${opts[@]}" -- "$endpoint"
 }
 
 dyndns() {
@@ -188,7 +188,7 @@ dyndns_ip() {
 	local desc=$3
 	local rectype=$4
 	if [[ " ipv$ipv both " =~ " ${GDAPI_DYNDNS_IP_TYPE,,} " ]]; then
-		ip=$(if [[ "$provider" ]]; then curl -s$ipv -- "$provider"; else IPv$ipv; fi)
+		ip=$(if [[ "$provider" ]]; then safecurl -s$ipv -- "$provider"; else IPv$ipv; fi)
 		if [[ -z "$ip" ]]; then fatal "Could not determine $desc address"; fi
 		dyndns_api "$rectype" "$ip"
 	fi
@@ -266,8 +266,15 @@ debug() {
 get_data_value() { awk 'BEGIN{RS="[^\\\\]\"data\":\""; FS="\""} NR>1{print $1}'; }
 
 IPv6() { ip -o -6 addr | awk -F'/| +' '$5 == 128 && $7 == "global" {print $4; exit}'; }
-IPv4() { curl -s -- 'https://api.ipify.org'; }
+IPv4() { safecurl -s -- 'https://api.ipify.org'; }
 
+safecurl() {
+	local opts=(
+		--max-time 30
+		--connect-timeout 10
+	)
+	curl "${opts[@]}" "$@"
+}
 
 # Input handling helper functions ----------------------------------------------
 
