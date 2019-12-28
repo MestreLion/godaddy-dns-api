@@ -60,7 +60,7 @@ class UpnpError(Exception): pass
 class UpnpValueError(UpnpError, ValueError): pass
 
 
-class XMLTree:
+class XMLElement:
     """Wrapper for a common XML API using either LXML, ET or Minidom"""
     @classmethod
     def fromstring(cls, data:str):
@@ -70,12 +70,28 @@ class XMLTree:
     def fromurl(cls, url:str):
         return cls(ET.parse(url))
 
-    def __init__(self, tree=None):
-        self.tree = tree
-        self.root = tree and tree.getroot()
+    def __init__(self, element):
+        if hasattr(element, 'getroot'):  # ElementTree instead of Element
+            element = element.getroot()
+        self.e = element
 
-    def findtext(self, tagpath):
-        return self.root.findtext(tagpath, namespaces=self.root.nsmap)
+    def findtext(self, tagpath:str) -> str:
+        return self.e.findtext(tagpath, namespaces=self.e.nsmap)
+
+    def find(self, tagpath):
+        e = self.e.find(tagpath, namespaces=self.e.nsmap)
+        if e:
+            return self.__class__(e)
+
+    def findall(self, tagpath):
+        for e in self.e.findall(tagpath, namespaces=self.e.nsmap):
+            yield self.__class__(e)
+
+    def __repr__(self):
+        return repr(self.e)
+
+    def __str__(self):
+        return str(self.e)
 
 
 class SSDP:
@@ -118,7 +134,8 @@ class Device:
     def __init__(self, url:str="", *, ssdp:SSDP=None, data:str=""):
         self.ssdp     = ssdp or SSDP(data)
         self.location = url or self.ssdp.headers.get('LOCATION')
-        self.xmltree  = XMLTree.fromurl(self.location)
+        self.xmlroot  = XMLElement.fromurl(self.location)
+        self.url_base = self.xmlroot.findtext('URLBase')
         for tag in (
             'deviceType',        # Required
             'friendlyName',      # Required
@@ -132,7 +149,7 @@ class Device:
             'UDN',               # Required
             'UPC',               # Allowed
         ):
-            setattr(self, util.snake_case(tag), self.xmltree.findtext(f'device/{tag}') or "")
+            setattr(self, util.snake_case(tag), self.xmlroot.findtext(f'device/{tag}') or "")
 
         if url and self.ssdp and url != self.ssdp.headers.get('LOCATION'):
             log.warning("URL and Location mismatch: %s, %s",
