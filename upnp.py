@@ -87,6 +87,10 @@ class XMLElement:
         for e in self.e.findall(tagpath, namespaces=self.e.nsmap):
             yield self.__class__(e)
 
+    @property
+    def text(self):
+        return self.e.text
+
     def __repr__(self):
         return repr(self.e)
 
@@ -135,7 +139,7 @@ class Device:
         self.ssdp     = ssdp or SSDP(data)
         self.location = url or self.ssdp.headers.get('LOCATION')
         self.xmlroot  = XMLElement.fromurl(self.location)
-        self.url_base = self.xmlroot.findtext('URLBase')
+        self.url_base = self.xmlroot.findtext('URLBase') or self.location
         util.attr_tags(self, self.xmlroot, 'device', (
             'deviceType',        # Required
             'friendlyName',      # Required
@@ -233,6 +237,10 @@ class util:
     @staticmethod
     def hostname(url:str) -> str:
         return urllib.parse.urlparse(url).hostname
+
+    @staticmethod
+    def urljoin(base:str, url:str) -> str:
+        return urllib.parse.urljoin(base, url)
 
     @staticmethod
     def clamp(value:int, lbound:int=None, ubound:int=None) -> int:
