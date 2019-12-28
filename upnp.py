@@ -200,13 +200,27 @@ class Service:
             'eventSubURL',  # Required
             'SCPDURL',      # Required
         ))
+        self.xmlroot = XMLElement.fromurl(util.urljoin(self.device.url_base, self.scpdurl))
+        #self.actions = tuple(_.text for _ in self.xmlroot.findall('actionList/action/name'))
+        self.actions = []
+        for action in self.xmlroot.findall('actionList/action'):
+            name = action.findtext('name')
+            inargs = []
+            outargs = []
+            for arg in action.findall('argumentList/argument'):
+                argname = arg.findtext('name')
+                if arg.findtext('direction') == 'in':
+                    inargs.append(argname)
+                else:
+                    outargs.append(argname)
+            self.actions.append(f"{name}({', '.join(inargs)}) -> [{', '.join(outargs)}]")
 
     @property
     def name(self):
         return self.service_id[self.service_id.rindex(":")+1:]
 
     def __repr__(self):
-        return f'<{self.__class__.__name__}({self.name})>'
+        return f'<{self.__class__.__name__}({self.name}: {self.actions})>'
 
 
 
@@ -310,7 +324,7 @@ def main(argv):
             return
     logging.basicConfig(level=loglevel, format='%(levelname)s: %(message)s')
 
-    devices = discover(SEARCH_TARGET.ROOT, timeout=2)
+    devices = discover(timeout=2)
 
     for device in devices:
         print(f'{device!r}: {device}')
@@ -318,7 +332,13 @@ def main(argv):
     for dtype in sorted(set(device.device_type for device in devices)):
         print(dtype)
 
-
+    actions = set()
+    for device in devices:
+        for service in device.services.values():
+            for action in service.actions:
+                actions.add(action)
+    for action in sorted(actions):
+        print(action)
 
 
 if __name__ == "__main__":
