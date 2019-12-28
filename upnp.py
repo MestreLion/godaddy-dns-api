@@ -136,7 +136,7 @@ class Device:
         self.location = url or self.ssdp.headers.get('LOCATION')
         self.xmlroot  = XMLElement.fromurl(self.location)
         self.url_base = self.xmlroot.findtext('URLBase')
-        for tag in (
+        util.attr_tags(self, self.xmlroot, 'device', (
             'deviceType',        # Required
             'friendlyName',      # Required
             'manufacturer',      # Required
@@ -148,12 +148,17 @@ class Device:
             'serialNumber',      # Recommended
             'UDN',               # Required
             'UPC',               # Allowed
-        ):
-            setattr(self, util.snake_case(tag), self.xmlroot.findtext(f'device/{tag}') or "")
+        ))
 
         if url and self.ssdp and url != self.ssdp.headers.get('LOCATION'):
             log.warning("URL and Location mismatch: %s, %s",
                         url, self.ssdp.headers.get('LOCATION'))
+
+        self.services = {}
+        for node in self.xmlroot.findall('device//serviceList/service'):
+            service = Service(self, node)
+            log.debug(service)
+            self.services[service.name] = service
 
     @property
     def name(self):
@@ -181,6 +186,26 @@ class Device:
         return f'<{self.__class__.__name__}({self.address!r}, {self.friendly_name!r})>'
 
 
+class Service:
+    def __init__(self, device:Device=None, service:XMLElement=None):
+        self.device = device
+        util.attr_tags(self, service, '', (
+            'serviceType',  # Required
+            'serviceId',    # Required
+            'controlURL',   # Required
+            'eventSubURL',  # Required
+            'SCPDURL',      # Required
+        ))
+
+    @property
+    def name(self):
+        return self.service_id[self.service_id.rindex(":")+1:]
+
+    def __repr__(self):
+        return f'<{self.__class__.__name__}({self.name})>'
+
+
+
 class util:
     """A bunch of utility functions and helpers, cos' I'm too lazy for a new module"""
     _re_snake_case = re.compile(r'((?<=[a-z0-9])[A-Z]|(?!^)[A-Z](?=[a-z]))')  # (?!^)([A-Z]+)
@@ -188,6 +213,13 @@ class util:
     @classmethod
     def snake_case(cls, camelCase: str) -> str:
         return re.sub(cls._re_snake_case, r'_\1', camelCase).lower()
+
+    @classmethod
+    def attr_tags(cls, obj, node:XMLElement, tagpath:str="", tags:tuple=()):
+        if tagpath: tagpath += '/'
+        for tag in tags:
+            setattr(obj, cls.snake_case(tag), node.findtext(tagpath+tag) or "")
+
 
     @staticmethod
     def parse_headers(data:str) -> dict:
