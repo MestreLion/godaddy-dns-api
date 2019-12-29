@@ -139,8 +139,8 @@ class Device:
         self.ssdp     = ssdp or SSDP(data)
         self.location = url or self.ssdp.headers.get('LOCATION')
         self.xmlroot  = XMLElement.fromurl(self.location)
-        self.url_base = self.xmlroot.findtext('URLBase') or self.location
-        util.attr_tags(self, self.xmlroot, 'device', (
+        self.url_base = self.xmlroot.findtext('URLBase') or util.urljoin(self.location, '.')
+        util.attr_tags(self, self.xmlroot, 'device', '', tags=(
             'deviceType',        # Required
             'friendlyName',      # Required
             'manufacturer',      # Required
@@ -191,9 +191,9 @@ class Device:
 
 
 class Service:
-    def __init__(self, device:Device=None, service:XMLElement=None):
+    def __init__(self, device:Device, service:XMLElement):
         self.device = device
-        util.attr_tags(self, service, '', (
+        util.attr_tags(self, service, '', device.url_base, tags=(
             'serviceType',  # Required
             'serviceId',    # Required
             'controlURL',   # Required
@@ -233,10 +233,20 @@ class util:
         return re.sub(cls._re_snake_case, r'_\1', camelCase).lower()
 
     @classmethod
-    def attr_tags(cls, obj, node:XMLElement, tagpath:str="", tags:tuple=()):
+    def attr_tags(cls, obj, node:XMLElement, tagpath:str="", baseurl:str='', tags:tuple=()) -> None:
+        """Magic method to set attributes from XML tag(name)s
+
+        Tag names must be leafs, not paths, with optional <tagpath> prefix
+        Automatically convert names from camelCaseURL to camel_case_url
+        URLs, judged by URL-ending tag name, are joined with <baseurl>
+        """
         if tagpath: tagpath += '/'
         for tag in tags:
-            setattr(obj, cls.snake_case(tag), node.findtext(tagpath+tag) or "")
+            attr  = cls.snake_case(tag)
+            value = node.findtext(tagpath+tag) or ""
+            if value and baseurl and attr.endswith('url'):
+                value = cls.urljoin(baseurl, value)
+            setattr(obj, attr, value)
 
 
     @staticmethod
