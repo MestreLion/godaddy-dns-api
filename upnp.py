@@ -187,7 +187,8 @@ class Device:
         return self.fullname
 
     def __repr__(self):
-        return f'<{self.__class__.__name__}({self.address!r}, {self.friendly_name!r})>'
+        r = f'{self.address!r}, {self.friendly_name!r}, {self.location!r}, {self.udn!r}'
+        return '<{0.__class__.__name__}({1})>'.format(self, r)
 
 
 class Service:
@@ -219,8 +220,18 @@ class Service:
     def name(self):
         return self.service_id[self.service_id.rindex(":")+1:]
 
+    def __str__(self):
+        return self.service_type
+
     def __repr__(self):
-        return f'<{self.__class__.__name__}({self.name}: {self.actions})>'
+        attrs = {
+            'service_type' : 'type',
+            'scpdurl'      : 'SCPD',
+            'control_url'  : 'CTRL',
+            'event_sub_url': 'EVT',
+        }
+        r = util.formatdict({attrs[k]: v for k, v in vars(self).items() if k in attrs})
+        return f'<{self.__class__.__name__}({r} [{len(self.actions)} actions])>'
 
 
 
@@ -248,6 +259,9 @@ class util:
                 value = cls.urljoin(baseurl, value)
             setattr(obj, attr, value)
 
+    @staticmethod
+    def formatdict(d:dict, itemsep=', ', pairsep='=', valuefunc=repr) -> str:
+        return itemsep.join((pairsep.join((k, valuefunc(v))) for k, v in d.items()))
 
     @staticmethod
     def parse_headers(data:str) -> dict:
@@ -291,6 +305,7 @@ def discover(search_target:str=None, *, timeout:int=SSDP_MAX_MX) -> list:
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 2)
     sock.settimeout(timeout)
+    log.info("Discovering UPnP devices and services: %s", search_target)
     log.debug("Broadcasting discovery search to %s:\n%s", addr, data)
     sock.sendto(bytes(data, 'ascii'), addr)
 
@@ -340,17 +355,19 @@ def main(argv):
             return
     logging.basicConfig(level=loglevel, format='%(levelname)s: %(message)s')
 
-    devices = discover(timeout=2)
 
+    ST = ""
+    devices = discover(ST, timeout=2)
+
+    print("Devices:")
     for device in devices:
         print(f'{device!r}: {device}')
 
-    for dtype in sorted(set(device.device_type for device in devices)):
-        print(dtype)
-
     actions = set()
     for device in devices:
+        print(repr(device))
         for service in device.services.values():
+            print('\t' + repr(service))
             for action in service.actions:
                 actions.add(action)
     for action in sorted(actions):
