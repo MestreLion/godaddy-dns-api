@@ -202,19 +202,7 @@ class Service:
             'SCPDURL',      # Required
         ))
         self.xmlroot = XMLElement.fromurl(util.urljoin(self.device.url_base, self.scpdurl))
-        #self.actions = tuple(_.text for _ in self.xmlroot.findall('actionList/action/name'))
-        self.actions = []
-        for action in self.xmlroot.findall('actionList/action'):
-            name = action.findtext('name')
-            inargs = []
-            outargs = []
-            for arg in action.findall('argumentList/argument'):
-                argname = arg.findtext('name')
-                if arg.findtext('direction') == 'in':
-                    inargs.append(argname)
-                else:
-                    outargs.append(argname)
-            self.actions.append(f"{name}({', '.join(inargs)}) -> [{', '.join(outargs)}]")
+        self.actions = [Action(self, _) for _ in self.xmlroot.findall('actionList/action')]
 
     @property
     def name(self):
@@ -233,6 +221,26 @@ class Service:
         r = util.formatdict({attrs[k]: v for k, v in vars(self).items() if k in attrs})
         return f'<{self.__class__.__name__}({r} [{len(self.actions)} actions])>'
 
+
+class Action:
+    def __init__(self, service:Service=None, action:XMLElement=None):
+        self.service = service
+        self.name = action.findtext('name')
+
+        self.inputs  = []
+        self.outputs = []
+        for arg in action.findall('argumentList/argument'):
+            argname = arg.findtext('name')
+            if arg.findtext('direction') == 'in':
+                self.inputs.append(argname)
+            else:
+                self.outputs.append(argname)
+
+    def __str__(self):
+        return self.name
+
+    def __repr__(self):
+        return f"<{self.name}({', '.join(self.inputs)}) -> [{', '.join(self.outputs)}]>"
 
 
 class util:
@@ -363,15 +371,17 @@ def main(argv):
     for device in devices:
         print(f'{device!r}: {device}')
 
-    actions = set()
     for device in devices:
         print(repr(device))
         for service in device.services.values():
             print('\t' + repr(service))
             for action in service.actions:
-                actions.add(action)
-    for action in sorted(actions):
-        print(action)
+                print('\t\t' + repr(action))
+                if action.name == ACTION:
+                    actions.append(action)
+            print()
+
+
 
 
 if __name__ == "__main__":
