@@ -284,7 +284,7 @@ def discover(search_target:str=None, *, timeout:int=SSDP_MAX_MX) -> list:
     log.debug("Broadcasting discovery search to %s:\n%s", addr, data)
     sock.sendto(bytes(data, 'ascii'), addr)
 
-    devices = []
+    devices = {}
     while True:
         try:
             data, (addr, _) = sock.recvfrom(SSDP_BUFFSIZE)
@@ -294,19 +294,25 @@ def discover(search_target:str=None, *, timeout:int=SSDP_MAX_MX) -> list:
 
         log.debug("Incoming search response from %s:\n%s", addr, data)
         ssdp = SSDP(data, addr)
+        location = ssdp.headers.get('LOCATION')
 
-        # Some non-root devices reply to discovery even when setting appropriate ST in M-SEARCH
+        if location in devices:
+            #TODO: drop this log after code is mature and skip dupes silently
+            log.debug("Ignoring duplicated device: %s", ssdp)
+            continue
+
+        # Some unrelated devices reply to discovery even when setting appropriate ST in M-SEARCH
         if search_target != SEARCH_TARGET.ALL and search_target != ssdp.headers.get('ST'):
             log.warning("Ignoring non-target device: %s", ssdp)
             continue
 
         try:
             log.info("Found device: %s", ssdp)
-            devices.append(Device.from_ssdp(ssdp))
+            devices[location] = Device.from_ssdp(ssdp)
         except UpnpError as e:
             log.error("Error adding device %s: %s", ssdp, e)
 
-    return devices
+    return list(devices.values())
 
 
 def main(argv):
