@@ -56,6 +56,11 @@ class SEARCH_TARGET(str, enum.Enum):
     WAN_CONNECTION = 'urn:schemas-upnp-org:service:WANIPConnection:1'
 
 
+class DIRECTION(str, enum.Enum):
+    IN  = 'in'
+    OUT = 'out'
+
+
 # Exceptions
 class UpnpError(Exception): pass
 class UpnpValueError(UpnpError, ValueError): pass
@@ -162,8 +167,7 @@ class Device:
         self.services = {}
         for node in self.xmlroot.findall('device//serviceList/service'):
             service = Service(self, node)
-            log.debug(service)
-            self.services[service.name] = service
+            self.services[service.service_type] = service
 
     @property
     def name(self):
@@ -203,7 +207,10 @@ class Service:
             'SCPDURL',      # Required
         ))
         self.xmlroot = XMLElement.fromurl(util.urljoin(self.device.url_base, self.scpdurl))
-        self.actions = [Action(self, _) for _ in self.xmlroot.findall('actionList/action')]
+        self.actions = {}
+        for node in self.xmlroot.findall('actionList/action'):
+            action = Action(self, node)
+            self.actions[action.name] = action
 
     @property
     def name(self):
@@ -220,7 +227,7 @@ class Service:
             'event_sub_url': 'EVT',
         }
         r = util.formatdict({attrs[k]: v for k, v in vars(self).items() if k in attrs})
-        return f'<{self.__class__.__name__}({r} [{len(self.actions)} actions])>'
+        return f'<{self.__class__.__name__}({r})>'
 
 
 class Action:
@@ -407,14 +414,14 @@ def main(argv):
         print(repr(device))
         for service in device.services.values():
             print('\t' + repr(service))
-            for action in service.actions:
+            for action in service.actions.values():
                 print('\t\t' + repr(action))
                 if action.name == ACTION:
                     actions.append(action)
             print()
 
     if actions:
-        log.info("Found action '%s' in %d times:", ACTION, len(actions))
+        log.info("Found action '%s' %d times:", ACTION, len(actions))
     for action in actions:
         service = action.service
         print(action())
