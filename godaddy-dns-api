@@ -58,6 +58,9 @@ GDAPI_DYNDNS_IP_TYPE=both
 GDAPI_DYNDNS_IPV4_PROVIDER='https://api.ipify.org'
 GDAPI_DYNDNS_IPV6_PROVIDER=
 
+# DHCP Renew - Intentionally undocumented
+GDAPI_DYNDNS_DHCP_RENEW_RETRIES=0
+
 
 # Main API functions -----------------------------------------------------------
 
@@ -187,9 +190,20 @@ dyndns_ip() {
 	local provider=$2
 	local desc=$3
 	local rectype=$4
+	local retry=${GDAPI_DYNDNS_DHCP_RENEW_RETRIES:-0}
 	if [[ " ipv$ipv both " =~ " ${GDAPI_DYNDNS_IP_TYPE,,} " ]]; then
-		ip=$(if [[ "$provider" ]]; then safecurl -s$ipv -- "$provider"; else IPv$ipv; fi)
+		while
+			message "Determining external IPv$ipv address"
+			! ip=$(if [[ "$provider" ]]; then safecurl -s$ipv -- "$provider"; else IPv$ipv; fi) &&
+			((retry--))
+		do
+			message "Renewing DHCP Lease"
+			log "Renewing DHCP Lease"
+			# On success sleep a lot before retry, on failure sleep only a little
+			$mydir/renew.sh && sleep 30 || sleep 5
+		done
 		if [[ -z "$ip" ]]; then fatal "Could not determine $desc address"; fi
+		message "External IPv$ipv address: $ip"
 		dyndns_api "$rectype" "$ip"
 	fi
 }
