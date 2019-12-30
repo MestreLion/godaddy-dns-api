@@ -20,14 +20,18 @@
 """upnp - Find and use devices via UPnP"""
 
 __all__ = [
-    'discover',
+    'Action',
     'Device',
+    'Service',
+    'SEARCH_TARGET',
+    'SOAPCall',
     'UpnpError',
     'UpnpValueError',
-    'SEARCH_TARGET',
+    'discover',
 ]
 
 
+import argparse
 import enum
 import logging
 import os.path
@@ -385,20 +389,46 @@ def SOAPCall(url, service, action, **kwargs):
     return r.text
 
 
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument('-q', '--quiet',
+                       dest='loglevel',
+                       const=logging.WARNING,
+                       default=logging.INFO,
+                       action="store_const",
+                       help="Suppress informative messages.")
+
+    group.add_argument('-v', '--verbose',
+                       dest='loglevel',
+                       const=logging.DEBUG,
+                       action="store_const",
+                       help="Verbose mode, output extra info.")
+
+    parser.add_argument('-a', '--action',
+                        default='GetExternalIPAddress',
+                        help="Action to perform."
+                            " [Default: %(default)s]")
+
+    parser.add_argument(nargs='*',
+                        dest='args',
+                        help="Arguments to Action")
+
+    args = parser.parse_args(argv)
+    args.debug = args.loglevel == logging.DEBUG
+
+    return args
+
+
 def main(argv):
-    USAGE = """
-        Find UPnP devices
-        Usage: upnp [-v|-q]
-    """
-    loglevel = logging.INFO
-    if len(argv) > 1:
-        if   argv[1] in ('-v', '--verbose'): loglevel = logging.DEBUG
-        elif argv[1] in ('-q', '--quiet'):   loglevel = logging.WARN
-        else:
-            # Assume "-h|--help"
-            print('\n'.join(_.strip() for _ in USAGE.strip().splitlines()))
-            return
-    logging.basicConfig(level=loglevel, format='%(levelname)s: %(message)s')
+    args = parse_args(argv or [])
+    logging.basicConfig(level=args.loglevel,
+                        format='%(levelname)-5.5s: %(message)s')
+    log.debug(args)
 
 
     ST = ""
@@ -408,7 +438,6 @@ def main(argv):
     for device in devices:
         print(f'{device!r}: {device}')
 
-    ACTION = 'GetStatusInfo'
     actions = []
     for device in devices:
         print(repr(device))
@@ -416,12 +445,12 @@ def main(argv):
             print('\t' + repr(service))
             for action in service.actions.values():
                 print('\t\t' + repr(action))
-                if action.name == ACTION:
+                if action.name == args.action:
                     actions.append(action)
             print()
 
     if actions:
-        log.info("Found action '%s' %d times:", ACTION, len(actions))
+        log.info("Found action '%s' %d times:", args.action, len(actions))
     for action in actions:
         service = action.service
         print(action())
