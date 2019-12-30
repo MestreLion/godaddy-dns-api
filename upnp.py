@@ -37,6 +37,7 @@ import sys
 import urllib.parse
 
 import lxml.etree as ET
+import requests
 
 
 SSDP_MAX_MX:        int     = 5  # 2.0 Spec caps value to 5
@@ -236,6 +237,12 @@ class Action:
             else:
                 self.outputs.append(argname)
 
+    def call(self, **kwargs):
+        return SOAPCall(self.service.control_url, self.service.service_type, self.name)
+
+    def __call__(self, **kwargs):
+        return self.call(**kwargs)
+
     def __str__(self):
         return self.name
 
@@ -348,6 +355,29 @@ def discover(search_target:str=None, *, timeout:int=SSDP_MAX_MX) -> list:
     return list(devices.values())
 
 
+def SOAPCall(url, service, action, **kwargs):
+    data = f"""
+        <?xml version="1.0"?>
+        <s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"
+            s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">
+        <s:Body>
+        <u:{action} xmlns:u="{service}"></u:{action}>
+        </s:Body>
+        </s:Envelope>
+    """.strip()
+    headers = {
+        'SOAPAction': f'"{service}#{action}"',
+        'Content-Type': 'text/xml; charset="utf-8"',
+    }
+    log.info("Executing SOAP Action: %s.%s() @ %s", service, action, url)
+    log.debug(headers)
+    log.debug(data)
+    r = requests.post(url, headers=headers, data=data)
+    log.debug(r.request.headers)
+    log.debug(r.headers)
+    return r.text
+
+
 def main(argv):
     USAGE = """
         Find UPnP devices
@@ -371,6 +401,8 @@ def main(argv):
     for device in devices:
         print(f'{device!r}: {device}')
 
+    ACTION = 'GetStatusInfo'
+    actions = []
     for device in devices:
         print(repr(device))
         for service in device.services.values():
@@ -380,6 +412,12 @@ def main(argv):
                 if action.name == ACTION:
                     actions.append(action)
             print()
+
+    if actions:
+        log.info("Found action '%s' in %d times:", ACTION, len(actions))
+    for action in actions:
+        service = action.service
+        print(action())
 
 
 
