@@ -38,6 +38,7 @@ import os.path
 import re
 import socket
 import sys
+import typing as t
 import urllib.parse
 
 import lxml.etree as ET
@@ -72,13 +73,30 @@ class UpnpValueError(UpnpError, ValueError): pass
 
 class XMLElement:
     """Wrapper for a common XML API using either LXML, ET or Minidom"""
+    # Note: XML sucks! It's an incredibly complex format, and lxml is *very* picky
+    # - Serialized XML is always bytes, not str, per the spec
+    # - When converted to str (unicode), there's no <?xml ..?> declaration
+    # - pretty_print=True only works if parsed with remove_blank_text=True
+    # - Dealing with namespaces, many approaches:
+    #     e.find('{fully.qualified.namespace}tag')
+    #     e.find('{*}tag'), using a literal *
+    #     e.find('X:tag', namespaces=e.nsmap), X being (usually) a single lowercase letter
     @classmethod
-    def fromstring(cls, data:str):
-        return cls(ET.fromstring(data))
+    def fromstring(cls, data:t.Union[str, bytes]):
+        return cls(ET.fromstring(data, parser=ET.XMLParser(remove_blank_text=True)))
 
     @classmethod
     def fromurl(cls, url:str):
-        return cls(ET.parse(url))
+        log.debug("Parsing %s", url)
+        # lxml.etree.parse() chokes on URLs if server sets Content-Type header as
+        # 'text/xml; charset="utf-8"', as seen on Ubuntu's MiniDLNA rootDesc.xml
+        # So for now we use requests to download and read content
+        # return cls(ET.parse(url))
+        return cls.fromstring(requests.get(url).text)
+
+    @classmethod
+    def prettify(cls, s):
+        return cls.fromstring(s).pretty()
 
     def __init__(self, element):
         if hasattr(element, 'getroot'):  # ElementTree instead of Element
@@ -90,12 +108,18 @@ class XMLElement:
 
     def find(self, tagpath):
         e = self.e.find(tagpath, namespaces=self.e.nsmap)
-        if e:
+        if e is not None:
             return self.__class__(e)
 
     def findall(self, tagpath):
         for e in self.e.findall(tagpath, namespaces=self.e.nsmap):
             yield self.__class__(e)
+
+    def pretty(self) -> str:
+        # ET.tostring().decode() is not the same as ET.tostring(..., encoding=str)
+        # The latter errors when using xml_declaration=True
+        return ET.tostring(self.e, pretty_print=True,
+                           xml_declaration=True, encoding='utf-8').decode()
 
     @property
     def text(self):
@@ -135,6 +159,7 @@ class SSDP:
         return f'<{self.__class__.__name__}({desc})>'
 
 
+# noinspection PyUnresolvedReferences
 class Device:
     """UPnP Device"""
     @classmethod
@@ -200,6 +225,7 @@ class Device:
         return '<{0.__class__.__name__}({1})>'.format(self, r)
 
 
+# noinspection PyUnresolvedReferences
 class Service:
     def __init__(self, device:Device, service:XMLElement):
         self.device = device
@@ -234,6 +260,7 @@ class Service:
         return f'<{self.__class__.__name__}({r})>'
 
 
+# noinspection PyUnresolvedReferences
 class Action:
     def __init__(self, service:Service=None, action:XMLElement=None):
         self.service = service
@@ -249,7 +276,9 @@ class Action:
                 self.outputs.append(argname)
 
     def call(self, **kwargs):
-        return SOAPCall(self.service.control_url, self.service.service_type, self.name)
+        xml_root = SOAPCall(self.service.control_url, self.service.service_type, self.name, **kwargs)
+        return {k: xml_root.findtext(f'.//{k}') for k in self.outputs}
+
 
     def __call__(self, **kwargs):
         return self.call(**kwargs)
@@ -366,13 +395,15 @@ def discover(search_target:str=None, *, timeout:int=SSDP_MAX_MX) -> list:
     return list(devices.values())
 
 
-def SOAPCall(url, service, action, **kwargs):
+def SOAPCall(url, service, action, **kwargs) -> XMLElement:
+    # TODO: Sanitize kwargs!
+    xml_args = "\n".join(f"<{k}>{v}</{k}>" for k, v in kwargs.items())
     data = f"""
         <?xml version="1.0"?>
         <s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"
             s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">
         <s:Body>
-        <u:{action} xmlns:u="{service}"></u:{action}>
+            <u:{action} xmlns:u="{service}">{xml_args}</u:{action}>
         </s:Body>
         </s:Envelope>
     """.strip()
@@ -380,13 +411,19 @@ def SOAPCall(url, service, action, **kwargs):
         'SOAPAction': f'"{service}#{action}"',
         'Content-Type': 'text/xml; charset="utf-8"',
     }
-    log.info("Executing SOAP Action: %s.%s() @ %s", service, action, url)
+    log.info("Executing SOAP Action: %s.%s(%s) @ %s",
+             service, action, util.formatdict(kwargs), url)
     log.debug(headers)
-    log.debug(data)
+    log.debug(XMLElement.prettify(data))
     r = requests.post(url, headers=headers, data=data)
     log.debug(r.request.headers)
     log.debug(r.headers)
-    return r.text
+    xml_root = XMLElement.fromstring(r.content)
+    log.debug(xml_root.pretty())
+
+    # This is very strict. if things go wrong, replace with:
+    # return xml_root.find(f'.//{{{service}}}*'), or just return xml_root
+    return xml_root.find(f'{{*}}Body/{{{service}}}{action}Response')
 
 
 def parse_args(argv=None):
@@ -429,7 +466,6 @@ def main(argv):
     logging.basicConfig(level=args.loglevel,
                         format='%(levelname)-5.5s: %(message)s')
     log.debug(args)
-
 
     ST = ""
     devices = discover(ST, timeout=2)
