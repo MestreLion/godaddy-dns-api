@@ -109,6 +109,7 @@ usage() {
 }
 
 create_config() {
+	# shellcheck disable=SC2174
 	mkdir --parents --mode=0700 -- "$(dirname "$1")"
 	cat > "$1" <<-EOF
 		# Godaddy DNS API configuration file.
@@ -194,13 +195,13 @@ dyndns_ip() {
 	if [[ " ipv$ipv both " =~ " ${GDAPI_DYNDNS_IP_TYPE,,} " ]]; then
 		while
 			message "Determining external IPv$ipv address"
-			! ip=$(if [[ "$provider" ]]; then safecurl -s$ipv -- "$provider"; else IPv$ipv; fi) &&
+			! ip=$(if [[ "$provider" ]]; then safecurl -s"$ipv" -- "$provider"; else IPv"$ipv"; fi) &&
 			((retry--))
 		do
 			message "Renewing DHCP Lease"
 			log "Renewing DHCP Lease"
 			# On success sleep a lot before retry, on failure sleep only a little
-			$mydir/renew.sh && sleep 30 || sleep 5
+			if "$mydir"/renew.sh; then sleep 30; else sleep 5; fi
 		done
 		if [[ -z "$ip" ]]; then fatal "Could not determine $desc address"; fi
 		message "External IPv$ipv address: $ip"
@@ -214,7 +215,7 @@ dyndns_api() {
 	local ttl=${GDAPI_TTL:+",\"ttl\":${GDAPI_TTL}"}
 	local data="[{\"data\":\"${value}\"${ttl}}]"
 	local path=$GDAPI_ROOT_DOMAIN/records/$type/$GDAPI_DYNDNS_SUBDOMAIN
-	local curval=$(api "$path" | get_data_value)
+	local curval; curval=$(api "$path" | get_data_value)
 	if [[ "$curval" == "$value" ]]; then log "$value"; return; fi
 	api "$path" put "$data"
 	log "${value:--}\t${curval:--}"
@@ -235,7 +236,7 @@ certbot_auth() {
 	# Add new validation record along with currently existing records
 	# Needed when validating both root domain and wildcard, as certbot expects
 	# both validation values to simultaneously exist under the same name and type
-	local data=$({
+	local data; data=$({
 		# Build records with data and optionally TTL
 		# Name and type are not needed as they're already in path
 		local sep value recs ttl=${GDAPI_TTL:+",\"ttl\":${GDAPI_TTL}"}
@@ -266,7 +267,7 @@ certbot_cleanup() {
 
 fatal()   { echo "$@" >&2; exit 1; }
 message() { if ((verbose)); then echo "$@"; fi; }
-log()     { echo -e "$(date --rfc-3339=seconds)\t$@" >> "$logfile"; }
+log()     { echo -e "$(date --rfc-3339=seconds)\t$*" >> "$logfile"; }
 
 debug() {
 	local verb=${1:-GET}
@@ -323,7 +324,6 @@ esac
 for arg in "$@"; do [[ "$arg" == "-h" || "$arg" == "--help" ]] && usage; done
 
 # Parse command-line options that cannot override config file settings
-apiopts=()
 while (($#)); do
 	case "$1" in
 	-v|--verbose   ) verbose=1;;
