@@ -388,11 +388,9 @@ def discover(search_target:str=None, *, timeout:int=SSDP_MAX_MX) -> list:
 
         try:
             log.info("Found device: %s", ssdp)
-            devices[location] = Device.from_ssdp(ssdp)
+            yield location, Device.from_ssdp(ssdp)
         except UpnpError as e:
             log.error("Error adding device %s: %s", ssdp, e)
-
-    return list(devices.values())
 
 
 def SOAPCall(url, service, action, **kwargs) -> XMLElement:
@@ -468,29 +466,19 @@ def main(argv):
     log.debug(args)
 
     ST = ""
-    devices = discover(ST, timeout=2)
-
-    print("Devices:")
-    for device in devices:
-        print(f'{device!r}: {device}')
 
     actions = []
-    for device in devices:
-        print(repr(device))
+    print("Devices:")
+    for location, device in discover(ST, timeout=5):
+        print(f'{device!r}: {device}')
         for service in device.services.values():
             print('\t' + repr(service))
             for action in service.actions.values():
                 print('\t\t' + repr(action))
                 if action.name == args.action:
-                    actions.append(action)
+                    log.info("Found action matching %s: '%s':", args.action, action)
+                    print(action())
             print()
-
-    if actions:
-        log.info("Found action '%s' %d times:", args.action, len(actions))
-    for action in actions:
-        service = action.service
-        print(action())
-
 
 
 
