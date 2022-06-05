@@ -32,11 +32,15 @@
 
 # Default values ---------------------------------------------------------------
 
+# May be unset in systemd units
+USER=${USER:-$(id -un)}
+HOME=${HOME:-$(getent passwd "$USER" | cut -d: -f6)}
+
 # Internal
 myname=${0##*/}
 mydir=$(dirname "$(readlink -f "$0")")
-config=${XDG_CONFIG_HOME:-$HOME/.config}/godaddy-dns-api.conf
-logfile=${XDG_CACHE_HOME:-$HOME/.cache}/godaddy-dns-api.log
+config=${GDAPI_CONFIG:-${XDG_CONFIG_HOME:-${HOME}/.config}/godaddy-dns-api.conf}
+logfile=${GDAPI_LOG:-${XDG_CACHE_HOME:-${HOME}/.cache}/godaddy-dns-api.log}
 cmd=api
 cmdset=0
 verbose=0
