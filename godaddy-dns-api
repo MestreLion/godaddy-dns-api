@@ -26,10 +26,10 @@
 # @hourly $HOME/path/to/godaddy-dyndns
 
 # Suggested setup for certbot renew hooks:
-# systemctl edit certbot.service
+# sudo systemctl edit certbot.service
 # [Service]
 # Environment="GDAPI_CONFIG=/etc/godaddy-dns-api.conf"
-# ExecStart=/usr/local/bin/sch -c 'JOB_ID=certbot /usr/bin/certbot -q renew  # LetsEncrypt certificate renewal'
+# ExecStart=/usr/local/bin/healthchecks -slug certbot -- /usr/bin/certbot -q renew
 
 # Logsize for dyndns @hourly after 1 year, not considering both ipv6 and ipv4:
 # 878KiB, worst case scenario: full 40-digit IPv6 changing every hour, 105B per entry
