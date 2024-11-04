@@ -1,6 +1,6 @@
 #!/bin/bash -ue
 #
-# renew.sh - Helper to renew WAN lease
+# renew.sh - Helper to renew WAN lease in an old Technicolor TC7300 ISP router
 #
 #    Copyright (C) 2019 Rodrigo Silva (MestreLion) <linux@rodrigosilva.com>
 #
